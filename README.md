@@ -307,6 +307,134 @@ docker push TU_ACCOUNT_ID.dkr.ecr.us-east-2.amazonaws.com/webflux_demo:1.0
 curl http://IP_PUBLICO:8080/api/productos
 ```
 
+## Limpieza de Recursos AWS
+
+Para evitar costos innecesarios, elimina todos los recursos cuando termines de practicar:
+
+### 1. Eliminar Servicio y Cluster ECS
+
+```bash
+# Listar clusters
+aws ecs list-clusters
+
+# Listar servicios en el cluster
+aws ecs list-services --cluster NOMBRE_CLUSTER
+
+# Eliminar servicio (si existe)
+aws ecs delete-service --cluster NOMBRE_CLUSTER --service NOMBRE_SERVICIO --force
+
+# Listar tareas activas
+aws ecs list-tasks --cluster NOMBRE_CLUSTER
+
+# Detener tareas activas (si existen)
+aws ecs stop-task --cluster NOMBRE_CLUSTER --task TASK_ID
+
+# Eliminar cluster
+aws ecs delete-cluster --cluster NOMBRE_CLUSTER
+```
+
+### 2. Eliminar Task Definitions
+
+```bash
+# Listar task definitions
+aws ecs list-task-definitions
+
+# Eliminar cada revisión
+aws ecs deregister-task-definition --task-definition NOMBRE_TASK:REVISION
+```
+
+### 3. Eliminar Repositorio ECR
+
+```bash
+# Listar repositorios
+aws ecr describe-repositories
+
+# Eliminar repositorio
+aws ecr delete-repository --repository-name NOMBRE_REPOSITORIO --force
+```
+
+### 4. Eliminar Roles IAM (Opcional)
+
+```bash
+# Listar roles del proyecto
+aws iam list-roles --query 'Roles[?contains(RoleName, `ECS`) || contains(RoleName, `dynamo`)].RoleName'
+
+# Desenlazar políticas (solo roles creados para el proyecto)
+aws iam detach-role-policy --role-name NOMBRE_ROL --policy-arn arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+
+# Eliminar rol (opcional, no tiene costo)
+aws iam delete-role --role-name NOMBRE_ROL
+```
+
+### 5. Eliminar Tabla DynamoDB
+
+```bash
+# Listar tablas
+aws dynamodb list-tables --region us-east-2
+
+# Eliminar tabla
+aws dynamodb delete-table --table-name productos --region us-east-2
+```
+
+### 6. Script de Limpieza Completa
+
+```bash
+#!/bin/bash
+# Script para limpiar todos los recursos del proyecto
+
+# Variables (ajusta según tus nombres)
+CLUSTER_NAME="arnold_demo_cluster"
+TASK_FAMILY="arnoldtask-ecs"
+ECR_REPO="webflux_demo"
+TABLE_NAME="productos"
+ROLE_NAME="ECS-DynamoDB-Role"
+
+# Eliminar servicio y cluster
+aws ecs list-services --cluster $CLUSTER_NAME
+aws ecs delete-service --cluster $CLUSTER_NAME --service $(aws ecs list-services --cluster $CLUSTER_NAME --query 'serviceArns[0]' --output text | cut -d'/' -f2) --force 2>/dev/null
+aws ecs list-tasks --cluster $CLUSTER_NAME
+aws ecs stop-task --cluster $CLUSTER_NAME --task $(aws ecs list-tasks --cluster $CLUSTER_NAME --query 'taskArns[0]' --output text | cut -d'/' -f3) 2>/dev/null
+aws ecs delete-cluster --cluster $CLUSTER_NAME 2>/dev/null
+
+# Eliminar task definitions
+for revision in $(aws ecs list-task-definitions --family-prefix $TASK_FAMILY --query 'taskDefinitionArns[*]' --output text | tr '\t' '\n'); do
+    aws ecs deregister-task-definition --task-definition $(echo $revision | cut -d':' -f1-2)
+done
+
+# Eliminar ECR
+aws ecr delete-repository --repository-name $ECR_REPO --force 2>/dev/null
+
+# Eliminar tabla DynamoDB
+aws dynamodb delete-table --table-name $TABLE_NAME --region us-east-2 2>/dev/null
+
+# Eliminar rol IAM (opcional)
+aws iam detach-role-policy --role-name $ROLE_NAME --policy-arn arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess 2>/dev/null
+aws iam delete-role --role-name $ROLE_NAME 2>/dev/null
+
+echo "Limpieza completada"
+```
+
+### 7. Verificar Costos
+
+```bash
+# Ver costos del mes actual
+aws ce get-cost-and-usage --time-period Start=$(date -d 'first day of this month' +%Y-%m-%d),End=$(date +%Y-%m-%d) --granularity MONTHLY --metrics BlendedCost
+
+# Ver costos por servicio
+aws ce get-cost-and-usage --time-period Start=$(date -d 'first day of this month' +%Y-%m-%d),End=$(date +%Y-%m-%d) --granularity MONTHLY --group-by Type=DIMENSION,Key=SERVICE --metrics BlendedCost
+```
+
+### 8. Costos de Recursos
+
+| Recurso | Costo Mensual | Acción |
+|---------|---------------|--------|
+| ECS FARGATE | $0.0408/vCPU-hora + $0.0044/GB-hora | Eliminar cluster/servicio |
+| ECR Storage | $0.10/GB-mes | Eliminar repositorio |
+| DynamoDB PAY_PER_REQUEST | $1.25/mes + uso | Eliminar tabla |
+| Roles IAM | $0 | Opcional mantener |
+
+**Nota importante**: Los roles IAM no tienen costo, puedes conservarlos para futuros proyectos.
+
 ## Próximas mejoras
 
 - Agregar endpoints GET por ID, DELETE, UPDATE
